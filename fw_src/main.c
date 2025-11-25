@@ -1,108 +1,163 @@
-#include <xc.h>
+/*
+ * File:   main.c
+ * Author: winst
+ *
+ * Created on November 22, 2025, 7:17 PM
+ */
+
+#include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include "mcc_generated_files/system/system.h"
+#include "mcc_generated_files/adc/adc.h"
+#include "mcc_generated_files/uart/eusart1.h"
+#include "mcc_generated_files/system/pins.h"
+#include "mcc_generated_files/i2c_host/mssp1.h"
+#include <xc.h>
 
-#define _XTAL_FREQ 4000000
+#define VREF 5.0
+#define R_DIV 5.163265306
+#define ADC_MAX_COUNTS 1023.0
+#define I_SENSE_V_OFFSET 2.5
+#define I_SENSE_V_PER_A 0.045
+#define T_SENSE_ADDR 0x48
+#define T_SENSE_REG 0x00
 
-// ---------------------- ADC FUNCTIONS ----------------------
-void ADC_Init(void)
+unsigned int adcFETState = 0;
+
+typedef struct Voltages{
+    uint16_t c1_mv;
+    uint16_t c2_mv;
+    uint16_t c3_mv;
+    uint16_t c4_mv;
+} Voltages;
+
+double adcVoltageDecode(adc_result_t raw)
 {
-    // Configure analog pins
-    AD1PCFGbits.PCFG2 = 0;   // AN2 -> RA2
-    AD1PCFGbits.PCFG3 = 0;   // AN3 -> RA3
-    AD1PCFGbits.PCFG5 = 0;   // AN5 -> RB3
-    AD1PCFGbits.PCFG6 = 0;   // AN6 -> RB4
-    AD1PCFGbits.PCFG7 = 0;   // AN7 -> RB5
-
-    // ADC configuration
-    AD1CON1bits.FORM = 0;    // Integer 16-bit
-    AD1CON1bits.SSRC = 7;    // Auto-convert
-    AD1CON1bits.ASAM = 0;    // Manual sampling
-
-    AD1CON2 = 0;
-    AD1CON3bits.ADRC = 0;    // ADC clock from system
-    AD1CON3bits.SAMC = 10;   // Auto sample time
-    AD1CON3bits.ADCS = 5;    // ADC conversion clock
-
-    AD1CON1bits.ON = 1;      // Turn on ADC
+    double v_adc  = (raw / ADC_MAX_COUNTS) * VREF;
+    double v_cell = v_adc * R_DIV;
+    return v_cell;
 }
 
-uint16_t ADC_Read(uint8_t channel)
+double adcCurrentDecode(adc_result_t raw)
 {
-    AD1CHSbits.CH0SA = channel;   // Select channel
-    AD1CON1bits.SAMP = 1;         // Start sampling
-    for(volatile int i=0;i<1000;i++); // ~short delay for sampling
-    AD1CON1bits.SAMP = 0;         // Start conversion
-    while (!AD1CON1bits.DONE);    // Wait for conversion
-    return ADC1BUF0;
+    double v = (raw / ADC_MAX_COUNTS) * VREF;
+    //Clamp check?
+    double v_delta = v - I_SENSE_V_OFFSET;
+    double i = v_delta / I_SENSE_V_PER_A;
+    return i;
 }
 
-// ---------------------- UART PLACEHOLDER -------------------
-void UART_Send(uint16_t v1, uint16_t v2, uint16_t v3, uint16_t v4,
-               uint16_t current, uint16_t temperature, uint8_t soc)
+Voltages adcTapVoltages()
 {
-    // TODO: implement UART transmit
+    Voltages cellVoltages;
+    adc_result_t c1_raw = ADC_ChannelSelectAndConvert(IO_RA3);
+    adc_result_t c2_raw = ADC_ChannelSelectAndConvert(IO_RA6);
+    adc_result_t c3_raw = ADC_ChannelSelectAndConvert(IO_RB1);
+    adc_result_t c4_raw = ADC_ChannelSelectAndConvert(IO_RB3);
+    double c1_v = adcVoltageDecode(c1_raw);
+    double c2_v = adcVoltageDecode(c2_raw);
+    double c3_v = adcVoltageDecode(c3_raw);
+    double c4_v = adcVoltageDecode(c4_raw);
+    c4_v = c4_v - c3_v;
+    c3_v = c3_v - c2_v;
+    c2_v = c2_v - c1_v;
+    cellVoltages.c1_mv = (uint16_t)(c1_v * 1000.0 + 0.5);
+    cellVoltages.c2_mv = (uint16_t)(c2_v * 1000.0 + 0.5);
+    cellVoltages.c3_mv = (uint16_t)(c3_v * 1000.0 + 0.5);
+    cellVoltages.c4_mv = (uint16_t)(c4_v * 1000.0 + 0.5);
+    return cellVoltages;
 }
 
-// ---------------------- MAIN -------------------------------
+double adcCurrentSense()
+{
+    adc_result_t i_raw = ADC_ChannelSelectAndConvert(IO_RA1);
+    return adcCurrentDecode(i_raw);
+}
+
+void adcGATESHigh(){
+    IO_RA2_SetHigh();
+    IO_RA7_SetHigh();
+    IO_RB0_SetHigh();
+    IO_RB2_SetHigh();
+    adcFETState = 1;
+}
+
+void adcGATESLow(){
+    IO_RA2_SetLow();
+    IO_RA7_SetLow();
+    IO_RB0_SetLow();
+    IO_RB2_SetLow();
+    adcFETState = 0;
+}
+
+static int16_t tempDecode(){
+    uint8_t wbuf[1];
+    uint8_t rbuf[2];
+
+    wbuf[0] = T_SENSE_REG;
+    bool ok = I2C1_WriteRead_Blocking(T_SENSE_ADDR, wbuf, 1, rbuf, 2);
+    if (!ok){
+        return 0;
+    }
+    int16_t raw16 = ((int16_t)rbuf[0] << 8) | rbuf[1];
+    raw16 >>= 4;
+    if (raw16 & 0x0800){
+        raw16 |= 0xF000;
+    }
+    return raw16;
+}
+
+static double tempCelsius(){
+    int16_t counts = tempDecode();
+    return (double)counts * 0.0625;
+}
+
+static bool I2C1_WriteRead_Blocking(uint8_t addr, uint8_t *wbuf, size_t wlen, uint8_t *rbuf, size_t rlen) //?
+{
+    if (!I2C1_WriteRead((uint16_t)addr, wbuf, wlen, rbuf, rlen)){
+        return false;
+    }
+    while (I2C1_IsBusy()){
+        //
+    }
+    i2c_host_error_t err = I2C1_ErrorGet();
+    return (err == I2C_ERROR_NONE);
+}
+
 void main(void)
-{
-    // GPIO setup
-    TRISAbits.TRISA0 = 0; // Passive balancers
-    TRISAbits.TRISA1 = 0;
-    TRISCbits.TRISC2 = 0;
-    TRISCbits.TRISC5 = 0;
+{    
+    SYSTEM_Initialize();
+    INTERRUPT_GlobalInterruptEnable();
+    INTERRUPT_PeripheralInterruptEnable();
 
-    TRISAbits.TRISA2 = 1; // ADC inputs
-    TRISAbits.TRISA3 = 1;
-    TRISBbits.TRISB3 = 1;
-    TRISBbits.TRISB4 = 1;
-    TRISBbits.TRISB5 = 1; // Current sensor
+    unsigned int ms_counter = 0;
+    adcFETState = 0;
 
-    TRISAbits.TRISA7 = 0; // Voltage taps
-    TRISAbits.TRISA6 = 0;
-    TRISCbits.TRISC0 = 0;
-    TRISCbits.TRISC1 = 0;
+    while(1){
+        if (PIR0bits.TMR0IF){
+            PIR0bits.TMR0IF = 0;
+            ms_counter++;
 
-    ADC_Init();
+            if (ms_counter >= 4000 && adcFETState == 0)
+            {
+                adcGATESHigh();
+            }
+            
+            if (ms_counter >= 5000)
+            {
+                ms_counter = 0;
 
-    uint8_t soc = 100;
-    const uint16_t capacity_mAh = 2500;
-    const float efficiency = 0.95;
+                Voltages cellVoltages = adcTapVoltages();
+                double packCurrent = adcCurrentSense();
 
-    while(1)
-    {
-        // Enable voltage taps
-        LATAbits.LATA7 = 1;
-        LATAbits.LATA6 = 1;
-        LATCbits.LATC0 = 1;
-        LATCbits.LATC1 = 1;
-
-        for(volatile int i=0;i<5000;i++); // short delay (~10ms)
-
-        // Read voltages
-        uint16_t v1 = ADC_Read(2);
-        uint16_t v2 = ADC_Read(3);
-        uint16_t v3 = ADC_Read(5);
-        uint16_t v4 = ADC_Read(6);
-
-        // Disable voltage taps
-        LATAbits.LATA7 = 0;
-        LATAbits.LATA6 = 0;
-        LATCbits.LATC0 = 0;
-        LATCbits.LATC1 = 0;
-
-        for(volatile int i=0;i<25000;i++); // delay (~50ms)
-
-        // Read current sensor
-        current = ADC_Read(7);
-
-        // Read temperature sensor
-        uint16_t temperature = ADC_Read(1); // Example: AN1
-
-        // Simple SOC update placeholder (real calculation requires current in mA & time)
-        soc = soc + (uint8_t)((current * efficiency) / capacity_mAh);
-
-        // Send data via UART
-        UART_Send(v1, v2, v3, v4, current, temperature, soc);
+                printf("C1=%u mV  C2=%u mV  C3=%u mV  C4=%u mV  I=%d mA\r\n",
+                        cellVoltages.c1_mv, cellVoltages.c2_mv,
+                        cellVoltages.c3_mv, cellVoltages.c4_mv,
+                        packCurrent);
+                
+                adcGATESLow();
+            }
+        }
     }
 }
