@@ -102,35 +102,6 @@ void main(void)
         // Simple SOC update placeholder (real calculation requires current in mA & time)
         soc = soc + (uint8_t)((current * efficiency) / capacity_mAh);
 
-        // If the soc of any cell is too different from the others, engage the balancers
-        uint16_t max_v = v1;
-        if(v2 > max_v) max_v = v2;
-        if(v3 > max_v) max_v = v3;
-        if(v4 > max_v) max_v = v4;
-        uint16_t min_v = v1;
-        if(v2 < min_v) min_v = v2;
-        if(v3 < min_v) min_v = v3;
-        if(v4 < min_v) min_v = v4;
-        uint16_t delta_v = max_v - min_v;
-        const uint16_t balance_threshold = 50; // Example threshold
-        if(delta_v > balance_threshold)
-        {
-            // Engage balancers for cells above average voltage
-            uint16_t avg_v = (v1 + v2 + v3 + v4) / 4;
-            LATAbits.LATA0 = (v1 > avg_v) ? 1 : 0;
-            LATAbits.LATA1 = (v2 > avg_v) ? 1 : 0;
-            LATCbits.LATC2 = (v3 > avg_v) ? 1 : 0;
-            LATCbits.LATC5 = (v4 > avg_v) ? 1 : 0;
-        }
-        else
-        {
-            // Disengage all balancers
-            LATAbits.LATA0 = 0;
-            LATAbits.LATA1 = 0;
-            LATCbits.LATC2 = 0;
-            LATCbits.LATC5 = 0;
-        }
-
         // Send data via UART
         UART_Send(v1, v2, v3, v4, current, temperature, soc);
     }
