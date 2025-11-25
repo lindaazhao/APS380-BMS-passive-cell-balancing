@@ -24,7 +24,7 @@ CLEAN_SUBPROJECTS=${CLEAN_SUBPROJECTS_${SUBPROJECTS}}
 
 
 # Project Name
-PROJECTNAME=fw_src
+PROJECTNAME=MPLABXProjects
 
 # Active Configuration
 DEFAULTCONF=default
