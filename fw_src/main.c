@@ -32,14 +32,6 @@ typedef struct Voltages{
     uint16_t c4_mv;
 } Voltages;
 
-typedef struct FETs{
-    unsigned int adcFET;
-    int balanceFET1;
-    int balanceFET2;
-    int balanceFET3;
-    int balanceFET4;
-} FETs;
-
 void initialize();
 void adcGATESHigh();
 void adcGATESLow();
@@ -51,21 +43,27 @@ static int16_t tempDecode();
 void i2cTempSense();
 static void coulombCount();
 void update();
+void balanceHandler();
+void balanceDriver();
 
 Voltages cellVoltages;
 double packCurrent;
 int16_t tempC_int;
 int16_t tempC_frac;
 static double SoC;
-FETs FET;
+unsigned int adcFET;
+int balanceFET;
+bool balanceEnable;
 
 void initialize()
 {
     SYSTEM_Initialize();
     INTERRUPT_GlobalInterruptEnable();
     INTERRUPT_PeripheralInterruptEnable();
-    FET.adcFET = 0;
-    SoC = 1.0
+    adcFET = 0;
+    balanceFET = 0;
+    SoC = 1.0;
+    balanceEnable = false;
     printf("C1=n/a mV  C2=n/a mV  C3=n/a mV  C4=n/a mV  I=n/a A  T=n/a C  SoC=n/a\r\n");
 }
 
@@ -75,7 +73,7 @@ void adcGATESHigh()
     IO_RA7_SetHigh();
     IO_RB0_SetHigh();
     IO_RB2_SetHigh();
-    FET.adcFET = 1;
+    adcFET = 1;
 }
 
 void adcGATESLow()
@@ -84,7 +82,7 @@ void adcGATESLow()
     IO_RA7_SetLow();
     IO_RB0_SetLow();
     IO_RB2_SetLow();
-    FET.adcFET = 0;
+    adcFET = 0;
 }
 
 double adcVoltageDecode(adc_result_t raw)
@@ -184,27 +182,49 @@ void update(){
             (int)(SoC * 100.0 + 0.5));
 }
 
-void balanceCells(){
-    uint16_t max = -100;
-    int maxCell = 0;
-    if (cellVoltages.c1_mv > max){maxCell = 1;}
-    if (cellVoltages.c2_mv > max){maxCell = 2;}
-    if (cellVoltages.c3_mv > max){maxCell = 3;}
-    if (cellVoltages.c4_mv > max){maxCell = 4;}
-    if (maxCell == 1){}
+void balanceHandler(){
+    if (balanceFET == 0)
+    {
+        int max = -100;
+        int maxCell = 0;
+        if (cellVoltages.c1_mv > max){max = cellVoltages.c1_mv; maxCell = 1;}
+        if (cellVoltages.c2_mv > max){max = cellVoltages.c2_mv; maxCell = 2;}
+        if (cellVoltages.c3_mv > max){max = cellVoltages.c3_mv; maxCell = 3;}
+        if (cellVoltages.c4_mv > max){max = cellVoltages.c4_mv; maxCell = 4;}
+        balanceFET = maxCell;
+        if (balanceFET == 1){IO_RC0_SetHigh();}
+        else if (balanceFET == 2){IO_RC1_SetHigh();}
+        else if (balanceFET == 3){IO_RC2_SetHigh();}
+        else if (balanceFET == 4){IO_RC5_SetHigh();}
+    }
+    else
+    {
+        int min = 100;
+        int minCell = 0;
+        if (cellVoltages.c1_mv < min){min = cellVoltages.c1_mv; minCell = 1;}
+        if (cellVoltages.c2_mv < min){min = cellVoltages.c1_mv; minCell = 2;}
+        if (cellVoltages.c3_mv < min){min = cellVoltages.c1_mv; minCell = 3;}
+        if (cellVoltages.c4_mv < min){min = cellVoltages.c1_mv; minCell = 4;}
+
+        if (balanceFET == 1 && minCell == 1){IO_RC0_SetLow();}
+        else if (balanceFET == 2 && minCell == 2){IO_RC1_SetLow();}
+        else if (balanceFET == 3 && minCell == 3){IO_RC2_SetLow();}
+        else if (balanceFET == 4 && minCell == 4){IO_RC5_SetLow();}
+        balanceFET = 0;
+        balanceEnable = false;
+    }
 }
 
-/*IO_RC0_SetLow();
-IO_RC1_SetLow();
-IO_RC2_SetLow();
-IO_RC5_SetLow();
-IO_RC0_SetHigh();
-IO_RC1_SetHigh();
-IO_RC2_SetHigh();
-IO_RC5_SetHigh();*/
+void balanceDriver(){
+    adc_result_t raw = ADC_ChannelSelectAndConvert(IO_RA5);
+    double adc = (raw / ADC_MAX_COUNTS) * VREF;
+    if (adc > 4.5){balanceEnable = true;}
+    else if (balanceEnable == true){balanceHandler();}
+}
 
 void main(void)
-{    
+{
+    initialize();
     unsigned int ms_counter = 0;
 
     while(1)
@@ -214,7 +234,7 @@ void main(void)
             PIR0bits.TMR0IF = 0;
             ms_counter++;
 
-            if (ms_counter >= 4000 && FET.adcFET == 0)
+            if (ms_counter >= 4000 && adcFET == 0)
             {
                 adcGATESHigh();
             }
@@ -230,6 +250,8 @@ void main(void)
                 i2cTempSense();
 
                 coulombCount();
+
+                balanceDriver();
 
                 update();
                 

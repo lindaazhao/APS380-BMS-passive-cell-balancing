@@ -2,7 +2,7 @@
 
 manifest_file_version: 1.0.0
 project: BMS
-creation_date: 2025-11-24T15:34:39.237-05:00[America/New_York]
+creation_date: 2025-11-26T11:31:23.122-05:00[America/New_York]
 operating_system: Windows 11
 mcc_mode: IDE
 mcc_mode_version: v6.25
@@ -10,7 +10,7 @@ device_name: PIC18F26Q10
 compiler: XC8 3.10
 mcc_version: 5.5.2
 mcc_core_version: 5.7.1
-content_manager_version: 5.0.0
+content_manager_version: 5.0.1
 is_mcc_offline: false
 is_using_prerelease_versions: false
 mcc_content_registries: https://registry.npmjs.org/

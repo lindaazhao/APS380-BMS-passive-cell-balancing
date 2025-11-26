@@ -62,6 +62,12 @@
  * @ingroup adc
  * @brief Defines the Custom Name pin mapping for channels in @ref adc_channel_t
  */
+#define IO_RA5 ADC_CHANNEL_ANA5
+
+/**
+ * @ingroup adc
+ * @brief Defines the Custom Name pin mapping for channels in @ref adc_channel_t
+ */
 #define IO_RA6 ADC_CHANNEL_ANA6
 
 /**

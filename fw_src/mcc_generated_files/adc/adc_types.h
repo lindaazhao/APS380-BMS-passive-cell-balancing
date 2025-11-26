@@ -96,6 +96,7 @@ typedef enum
     ADC_CHANNEL_ANA0          = 0x0,   /**< IO_RA0: RA0*/  
     ADC_CHANNEL_ANA1          = 0x1,   /**< IO_RA1: RA1*/  
     ADC_CHANNEL_ANA3          = 0x3,   /**< IO_RA3: RA3*/  
+    ADC_CHANNEL_ANA5          = 0x5,   /**< IO_RA5: RA5*/  
     ADC_CHANNEL_ANA6          = 0x6,   /**< IO_RA6: RA6*/  
     ADC_CHANNEL_ANB1          = 0x9,   /**< IO_RB1: RB1*/  
     ADC_CHANNEL_ANB3          = 0xb    /**< IO_RB3: RB3*/  
