@@ -170,16 +170,21 @@ static void coulombCount()
     if (SoC < 0.0){SoC = 0.0;}
 }
 
-void update(){
-    printf("C1=%u mV  C2=%u mV  C3=%u mV  C4=%u mV  I=%.2f A  T=%d.%d C  SoC=%d%%\r\n",
-            cellVoltages.c1_mv,
-            cellVoltages.c2_mv,
-            cellVoltages.c3_mv,
-            cellVoltages.c4_mv,
-            packCurrent,
-            tempC_int,
-            tempC_frac,
-            (int)(SoC * 100.0 + 0.5));
+void update(void)
+{
+    int soc_pct = (int)(SoC * 100.0 + 0.5);
+
+    printf("%u,%u,%u,%u,%.3f,%d.%d,%d,%u,%d\r\n",
+           cellVoltages.c1_mv,   // mV
+           cellVoltages.c2_mv,   // mV
+           cellVoltages.c3_mv,   // mV
+           cellVoltages.c4_mv,   // mV
+           packCurrent,          // A
+           tempC_int,            // C (integer part)
+           tempC_frac,           // C (fractional part)
+           soc_pct,              // %
+           adcFET,               // 0/1
+           balanceFET);          // 0..4
 }
 
 void balanceHandler(){
@@ -219,7 +224,7 @@ void balanceDriver(){
     adc_result_t raw = ADC_ChannelSelectAndConvert(IO_RA5);
     double adc = (raw / ADC_MAX_COUNTS) * VREF;
     if (adc > 4.5){balanceEnable = true;}
-    else if (balanceEnable == true){balanceHandler();}
+    if (balanceEnable == true){balanceHandler();}
 }
 
 void main(void)
