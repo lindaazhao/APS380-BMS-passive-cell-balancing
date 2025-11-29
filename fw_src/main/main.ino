@@ -19,7 +19,7 @@ const int PIN_C3 = A2;
 const int PIN_C4 = A3;
 
 const int PIN_I_SENSE = A4;
-const int PIN_BALANCE_ENABLE = A5;
+const int PIN_BALANCE_ENABLE = 2;
 
 const int PIN_BAL1 = 6;
 const int PIN_BAL2 = 7;
@@ -54,12 +54,13 @@ void initialize() {
     pinMode(PIN_BAL2, OUTPUT);
     pinMode(PIN_BAL3, OUTPUT);
     pinMode(PIN_BAL4, OUTPUT);
+    pinMode(PIN_BALANCE_ENABLE, INPUT);
 
     // Serial.println("C1=n/a mV  C2=n/a mV  C3=n/a mV  C4=n/a mV  I=n/a A  T=n/a C  SoC=n/a");
 }
 
 double adcVoltageDecode(int raw) {
-    double v_adc  = (raw / ADC_MAX_COUNTS) * VREF;
+    double v_adc  = raw * (VREF / ADC_MAX_COUNTS);
     double v_cell = v_adc * R_DIV;
     return v_cell;
 }
@@ -73,16 +74,29 @@ void adcTapVoltages() {
     int c3_raw = analogRead(PIN_C3);
     int c4_raw = analogRead(PIN_C4);
 
+    // Serial.print("Cell1="); Serial.print(c1_raw);
+    // Serial.print("\nCell2="); Serial.print(c2_raw);
+    // Serial.print("\nCell3="); Serial.print(c3_raw);
+    // Serial.print("\nCell4="); Serial.print(c4_raw);
+    // Serial.print("\n");
+
     double c1_v = adcVoltageDecode(c1_raw);
     double c2_v = adcVoltageDecode(c2_raw);
     double c3_v = adcVoltageDecode(c3_raw);
     double c4_v = adcVoltageDecode(c4_raw);
 
+    // Serial.print("V_Cell1="); Serial.print(c1_v);
+    // Serial.print("\nV_Cell2="); Serial.print(c2_v);
+    // Serial.print("\nV_Cell3="); Serial.print(c3_v);
+    // Serial.print("\nV_Cell4="); Serial.print(c4_v);
+    // Serial.print("\n");
+
     c4_v = c4_v - c3_v;
     c3_v = c3_v - c2_v;
     c2_v = c2_v - c1_v;
 
-    cellVoltages.c1_mv = (uint16_t)(c1_v * 1000.0 + 0.5);
+    // Convert to mV; +0.5 for correct rounding during int conversion
+    cellVoltages.c1_mv = (uint16_t)(c1_v * 1000.0 + 0.5); 
     cellVoltages.c2_mv = (uint16_t)(c2_v * 1000.0 + 0.5);
     cellVoltages.c3_mv = (uint16_t)(c3_v * 1000.0 + 0.5);
     cellVoltages.c4_mv = (uint16_t)(c4_v * 1000.0 + 0.5);
@@ -183,9 +197,7 @@ void balanceHandler() {
 }
 
 void balanceDriver() {
-    double adc = (analogRead(PIN_BALANCE_ENABLE) / ADC_MAX_COUNTS) * VREF;
-    if (adc > 4.5) balanceEnable = true;
-
+    balanceEnable = digitalRead(PIN_BALANCE_ENABLE);
     if (balanceEnable) balanceHandler();
 }
 
@@ -194,6 +206,17 @@ void balanceDriver() {
 // ==========================================================
 void update() {
     int soc_pct = (int)(SoC * 100.0 + 0.5);
+
+    // Serial.print("V_Cell1="); Serial.print(cellVoltages.c1_mv); Serial.print(",");
+    // Serial.print("V_Cell2="); Serial.print(cellVoltages.c2_mv); Serial.print(",");
+    // Serial.print("V_Cell3="); Serial.print(cellVoltages.c3_mv); Serial.print(",");
+    // Serial.print("V_Cell4="); Serial.print(cellVoltages.c4_mv); Serial.print(",");
+    // Serial.print("I_pack=");  Serial.print(packCurrent, 3);     Serial.print(",");
+    // Serial.print("T_pack=");  Serial.print(tempC_int);          Serial.print(".");
+    // Serial.print(tempC_frac);         Serial.print(",");
+    // Serial.print("SOC=");     Serial.print(soc_pct);            Serial.print(",");
+    // Serial.print(adcFET);             Serial.print(",");
+    // Serial.println(balanceFET);
 
     Serial.print(cellVoltages.c1_mv); Serial.print(",");
     Serial.print(cellVoltages.c2_mv); Serial.print(",");

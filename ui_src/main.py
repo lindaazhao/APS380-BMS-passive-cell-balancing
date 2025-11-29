@@ -11,7 +11,7 @@ from collections import deque
 # ======================================================
 # ------------------- CONFIG ---------------------------
 # ======================================================
-COM_PORT = "COM6"
+COM_PORT = "COM12"
 BAUD_RATE = 115200
 UPDATE_INTERVAL = 100   # ms
 WINDOW_SIZE = 200       # points on graphs
@@ -142,7 +142,7 @@ class App:
 
     # ====================================================
     def connect_serial(self):
-        print("Connecting to COM6...")
+        print(f"Connecting to {COM_PORT}...")
         thread = threading.Thread(target=com_reader_thread,
                                   args=(COM_PORT, self.update_from_thread),
                                   daemon=True)
