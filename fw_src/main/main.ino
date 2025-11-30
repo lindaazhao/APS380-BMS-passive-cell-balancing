@@ -8,19 +8,25 @@
 #define I_SENSE_V_PER_A 0.045
 #define T_SENSE_ADDR 0x48
 #define T_SENSE_REG 0x00
-#define PACK_CAP 2.5
-#define I_INTERVAL 5   // seconds
+#define PACK_CAP 2.5    // Ah
+#define I_INTERVAL 5    // seconds
+#define BALANCE_START_MV 20
+#define BALANCE_STOP_MV 10
+bool balanceActive[4] = {false, false, false, false};
 
-// === PIN ASSIGNMENT – YOU MUST MAP THESE ===
-// PIC pins have been replaced by placeholder Arduino pins
+
+// === PIN ASSIGNMENT ===
+// Cell voltage ADCs
 const int PIN_C1 = A0;
 const int PIN_C2 = A1;
 const int PIN_C3 = A2;
 const int PIN_C4 = A3;
 
 const int PIN_I_SENSE = A4;
+
 const int PIN_BALANCE_ENABLE = 2;
 
+// Balance enable GPIOs
 const int PIN_BAL1 = 6;
 const int PIN_BAL2 = 7;
 const int PIN_BAL3 = 8;
@@ -50,24 +56,25 @@ void initialize() {
     Serial.begin(115200);
     Wire.begin();
 
+    pinMode(PIN_BALANCE_ENABLE, INPUT);
+
     pinMode(PIN_BAL1, OUTPUT);
     pinMode(PIN_BAL2, OUTPUT);
     pinMode(PIN_BAL3, OUTPUT);
     pinMode(PIN_BAL4, OUTPUT);
-    pinMode(PIN_BALANCE_ENABLE, INPUT);
-
+    
     // Serial.println("C1=n/a mV  C2=n/a mV  C3=n/a mV  C4=n/a mV  I=n/a A  T=n/a C  SoC=n/a");
 }
 
+// ==========================================================
+// VOLTAGE MEASUREMENT
+// ==========================================================
 double adcVoltageDecode(int raw) {
     double v_adc  = raw * (VREF / ADC_MAX_COUNTS);
     double v_cell = v_adc * R_DIV;
     return v_cell;
 }
 
-// ==========================================================
-// VOLTAGE MEASUREMENT
-// ==========================================================
 void adcTapVoltages() {
     int c1_raw = analogRead(PIN_C1);
     int c2_raw = analogRead(PIN_C2);
@@ -91,6 +98,7 @@ void adcTapVoltages() {
     // Serial.print("\nV_Cell4="); Serial.print(c4_v);
     // Serial.print("\n");
 
+    // Get individual cell voltages (not absolute)
     c4_v = c4_v - c3_v;
     c3_v = c3_v - c2_v;
     c2_v = c2_v - c1_v;
@@ -107,7 +115,7 @@ void adcTapVoltages() {
 // ==========================================================
 void adcCurrentSense() {
     int raw = analogRead(PIN_I_SENSE);
-    double v = (raw / ADC_MAX_COUNTS) * VREF;
+    double v = raw * (VREF / ADC_MAX_COUNTS);
     double v_delta = v - I_SENSE_V_OFFSET;
     packCurrent = v_delta / I_SENSE_V_PER_A;
 }
@@ -150,7 +158,8 @@ void i2cTempSense() {
 // COULOMB COUNTING
 // ==========================================================
 void coulombCount() {
-    double delta_Ah = packCurrent * ((double)I_INTERVAL / 3600.0);
+    // Define positive current as discharging
+    double delta_Ah = packCurrent * ((double) I_INTERVAL / 3600.0);
     SoC -= delta_Ah / PACK_CAP;
 
     if (SoC > 1.0) SoC = 1.0;
@@ -161,44 +170,56 @@ void coulombCount() {
 // BALANCING
 // ==========================================================
 void balanceHandler() {
-    if (balanceFET == 0) {
-        int maxVal = -100;
-        int maxCell = 0;
+    // Find lowest cell voltage
+    int minVal = cellVoltages.c1_mv;
+    if (cellVoltages.c2_mv < minVal) minVal = cellVoltages.c2_mv;
+    if (cellVoltages.c3_mv < minVal) minVal = cellVoltages.c3_mv;
+    if (cellVoltages.c4_mv < minVal) minVal = cellVoltages.c4_mv;
 
-        if (cellVoltages.c1_mv > maxVal) { maxVal = cellVoltages.c1_mv; maxCell = 1; }
-        if (cellVoltages.c2_mv > maxVal) { maxVal = cellVoltages.c2_mv; maxCell = 2; }
-        if (cellVoltages.c3_mv > maxVal) { maxVal = cellVoltages.c3_mv; maxCell = 3; }
-        if (cellVoltages.c4_mv > maxVal) { maxVal = cellVoltages.c4_mv; maxCell = 4; }
+    // Connstruct array from cell voltages
+    int cellValues[4] = {
+        cellVoltages.c1_mv,
+        cellVoltages.c2_mv,
+        cellVoltages.c3_mv,
+        cellVoltages.c4_mv
+    };
 
-        balanceFET = maxCell;
+    // Update balance state for each cell
+    for (int i = 0; i < 4; i++) {
+        int cv = cellValues[i];
 
-        if (maxCell == 1) digitalWrite(PIN_BAL1, HIGH);
-        if (maxCell == 2) digitalWrite(PIN_BAL2, HIGH);
-        if (maxCell == 3) digitalWrite(PIN_BAL3, HIGH);
-        if (maxCell == 4) digitalWrite(PIN_BAL4, HIGH);
+        // Turn ON if above start threshold and currently off
+        if (!balanceActive[i] && cv > minVal + BALANCE_START_MV) {
+            balanceActive[i] = true;
+        }
+
+        // Turn OFF if cell has dropped close to min value
+        if (balanceActive[i] && cv <= minVal + BALANCE_STOP_MV) {
+            balanceActive[i] = false;
+        }
     }
-    else {
-        int minVal = 100000;
-        int minCell = 0;
 
-        if (cellVoltages.c1_mv < minVal) { minVal = cellVoltages.c1_mv; minCell = 1; }
-        if (cellVoltages.c2_mv < minVal) { minVal = cellVoltages.c2_mv; minCell = 2; }
-        if (cellVoltages.c3_mv < minVal) { minVal = cellVoltages.c3_mv; minCell = 3; }
-        if (cellVoltages.c4_mv < minVal) { minVal = cellVoltages.c4_mv; minCell = 4; }
-
-        if (balanceFET == 1 && minCell == 1) digitalWrite(PIN_BAL1, LOW);
-        if (balanceFET == 2 && minCell == 2) digitalWrite(PIN_BAL2, LOW);
-        if (balanceFET == 3 && minCell == 3) digitalWrite(PIN_BAL3, LOW);
-        if (balanceFET == 4 && minCell == 4) digitalWrite(PIN_BAL4, LOW);
-
-        balanceFET = 0;
-        balanceEnable = false;
-    }
+    // Apply balancing outputs
+    digitalWrite(PIN_BAL1, balanceActive[0] ? HIGH : LOW);
+    digitalWrite(PIN_BAL2, balanceActive[1] ? HIGH : LOW);
+    digitalWrite(PIN_BAL3, balanceActive[2] ? HIGH : LOW);
+    digitalWrite(PIN_BAL4, balanceActive[3] ? HIGH : LOW);
 }
 
 void balanceDriver() {
     balanceEnable = digitalRead(PIN_BALANCE_ENABLE);
-    if (balanceEnable) balanceHandler();
+
+    if (balanceEnable) {
+        balanceHandler();
+    } else {
+        // Ensure all FETs are OFF if balancing disabled
+        for (int i = 0; i < 4; i++) balanceActive[i] = false;
+
+        digitalWrite(PIN_BAL1, LOW);
+        digitalWrite(PIN_BAL2, LOW);
+        digitalWrite(PIN_BAL3, LOW);
+        digitalWrite(PIN_BAL4, LOW);
+    }
 }
 
 // ==========================================================
@@ -218,6 +239,7 @@ void update() {
     // Serial.print(adcFET);             Serial.print(",");
     // Serial.println(balanceFET);
 
+    // Print for UI display
     Serial.print(cellVoltages.c1_mv); Serial.print(",");
     Serial.print(cellVoltages.c2_mv); Serial.print(",");
     Serial.print(cellVoltages.c3_mv); Serial.print(",");
