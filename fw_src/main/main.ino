@@ -10,8 +10,21 @@
 #define T_SENSE_REG 0x00
 #define PACK_CAP 2.5    // Ah
 #define I_INTERVAL 5    // seconds
-#define BALANCE_START_MV 20
-#define BALANCE_STOP_MV 10
+const double BALANCE_START_SOC_TH = 0.05;
+const double BALANCE_STOP_SOC_TH = 0.02;
+
+const double C1_CAP = 2472.0;
+const double C2_CAP = 2474.0;
+const double C3_CAP = 2240.0;
+const double C4_CAP = 2290.0;
+
+const double C1_CUR = 2271.0;
+const double C2_CUR = 2275.0;
+const double C3_CUR = 2233.0;
+const double C4_CUR = 2275.0;
+
+const double I_discharge = 3;
+
 bool balanceActive[4] = {false, false, false, false};
 
 
@@ -40,7 +53,15 @@ struct Voltages {
     uint16_t c4_mv;
 };
 
+struct cellSOC {
+    double c1_soc;
+    double c2_soc;
+    double c3_soc;
+    double c4_soc;
+};
+
 Voltages cellVoltages;
+cellSOC cell_SOCs;
 double packCurrent;
 int16_t tempC_int;
 int16_t tempC_frac;
@@ -48,7 +69,6 @@ double SoC = 1.0;
 int adcFET = 0;
 int balanceFET = 0;
 bool balanceEnable = false;
-
 // ==========================================================
 // INITIALIZATION
 // ==========================================================
@@ -62,7 +82,11 @@ void initialize() {
     pinMode(PIN_BAL2, OUTPUT);
     pinMode(PIN_BAL3, OUTPUT);
     pinMode(PIN_BAL4, OUTPUT);
-    
+
+    cell_SOCs.c1_soc = C1_CUR / C1_CAP;
+    cell_SOCs.c2_soc = C2_CUR / C2_CAP;
+    cell_SOCs.c3_soc = C3_CUR / C3_CAP;
+    cell_SOCs.c4_soc = C4_CUR / C4_CAP;
     // Serial.println("C1=n/a mV  C2=n/a mV  C3=n/a mV  C4=n/a mV  I=n/a A  T=n/a C  SoC=n/a");
 }
 
@@ -80,12 +104,6 @@ void adcTapVoltages() {
     int c2_raw = analogRead(PIN_C2);
     int c3_raw = analogRead(PIN_C3);
     int c4_raw = analogRead(PIN_C4);
-
-    // Serial.print("Cell1="); Serial.print(c1_raw);
-    // Serial.print("\nCell2="); Serial.print(c2_raw);
-    // Serial.print("\nCell3="); Serial.print(c3_raw);
-    // Serial.print("\nCell4="); Serial.print(c4_raw);
-    // Serial.print("\n");
 
     double c1_v = adcVoltageDecode(c1_raw);
     double c2_v = adcVoltageDecode(c2_raw);
@@ -116,6 +134,7 @@ void adcTapVoltages() {
 void adcCurrentSense() {
     int raw = analogRead(PIN_I_SENSE);
     double v = raw * (VREF / ADC_MAX_COUNTS);
+    // Serial.print("Current_sense_v = "); Serial.println(v);
     double v_delta = v - I_SENSE_V_OFFSET;
     packCurrent = v_delta / I_SENSE_V_PER_A;
 }
@@ -157,13 +176,42 @@ void i2cTempSense() {
 // ==========================================================
 // COULOMB COUNTING
 // ==========================================================
-void coulombCount() {
-    // Define positive current as discharging
-    double delta_Ah = packCurrent * ((double) I_INTERVAL / 3600.0);
-    SoC -= delta_Ah / PACK_CAP;
+// void coulombCount() {
+//     // Define positive current as discharging
+//     double delta_mAh = 1000 * I_discharge * ((double) I_INTERVAL / 3600.0);
+//     // double delta_mAh = 10;
+//     Serial.print("delta Ah ="); Serial.println(delta_mAh);
+ 
+//     cell_SOCs.c1_soc -= delta_mAh / C1_CAP;
+//     cell_SOCs.c2_soc -= delta_mAh / C2_CAP;
+//     cell_SOCs.c3_soc -= delta_mAh / C3_CAP;
+//     cell_SOCs.c4_soc -= delta_mAh / C4_CAP;
+//     // SoC -= delta_Ah / PACK_CAP;
 
-    if (SoC > 1.0) SoC = 1.0;
-    if (SoC < 0.0) SoC = 0.0;
+//     // if (SoC > 1.0) SoC = 1.0;
+//     // if (SoC < 0.0) SoC = 0.0;
+// }
+
+void coulombCountCell(int cell_idx) {
+    // Define positive current as discharging
+    double delta_mAh = 1000 * I_discharge * ((double) I_INTERVAL / 3600.0);
+    // double delta_mAh = 10;
+    // Serial.print("delta Ah="); Serial.println(delta_mAh);
+ 
+    if (cell_idx == 0) {
+        cell_SOCs.c1_soc -= delta_mAh / C1_CAP;
+    } else if (cell_idx == 1) {
+        cell_SOCs.c2_soc -= delta_mAh / C2_CAP;
+    } else if (cell_idx == 2) {
+        cell_SOCs.c3_soc -= delta_mAh / C3_CAP;
+    } else {
+        cell_SOCs.c4_soc -= delta_mAh / C4_CAP;
+    }
+    
+    // SoC -= delta_Ah / PACK_CAP;
+
+    // if (SoC > 1.0) SoC = 1.0;
+    // if (SoC < 0.0) SoC = 0.0;
 }
 
 // ==========================================================
@@ -171,31 +219,37 @@ void coulombCount() {
 // ==========================================================
 void balanceHandler() {
     // Find lowest cell voltage
-    int minVal = cellVoltages.c1_mv;
-    if (cellVoltages.c2_mv < minVal) minVal = cellVoltages.c2_mv;
-    if (cellVoltages.c3_mv < minVal) minVal = cellVoltages.c3_mv;
-    if (cellVoltages.c4_mv < minVal) minVal = cellVoltages.c4_mv;
+    double minSOC = cell_SOCs.c1_soc;
+    if (cell_SOCs.c2_soc < minSOC) minSOC = cell_SOCs.c2_soc;
+    if (cell_SOCs.c3_soc < minSOC) minSOC = cell_SOCs.c3_soc;
+    if (cell_SOCs.c4_soc < minSOC) minSOC = cell_SOCs.c4_soc;
 
     // Connstruct array from cell voltages
-    int cellValues[4] = {
-        cellVoltages.c1_mv,
-        cellVoltages.c2_mv,
-        cellVoltages.c3_mv,
-        cellVoltages.c4_mv
+    double cellValues[4] = {
+        cell_SOCs.c1_soc,
+        cell_SOCs.c2_soc,
+        cell_SOCs.c3_soc,
+        cell_SOCs.c4_soc
     };
 
     // Update balance state for each cell
     for (int i = 0; i < 4; i++) {
-        int cv = cellValues[i];
+        double cv = cellValues[i];
 
         // Turn ON if above start threshold and currently off
-        if (!balanceActive[i] && cv > minVal + BALANCE_START_MV) {
+        if (!balanceActive[i] && cv > minSOC + BALANCE_START_SOC_TH) {
             balanceActive[i] = true;
+            // Serial.print("Balancing cell #"); Serial.print(i+1); Serial.print("\n");
         }
 
         // Turn OFF if cell has dropped close to min value
-        if (balanceActive[i] && cv <= minVal + BALANCE_STOP_MV) {
+        if (balanceActive[i] && cv <= minSOC + BALANCE_STOP_SOC_TH) {
             balanceActive[i] = false;
+            // Serial.print("Stopping balancing for cell #"); Serial.print(i+1); Serial.print("\n");
+        }
+
+        if (balanceActive[i]) {
+            coulombCountCell(i);
         }
     }
 
@@ -211,8 +265,10 @@ void balanceDriver() {
 
     if (balanceEnable) {
         balanceHandler();
+        // Serial.println("Cell balancing enabled");
     } else {
         // Ensure all FETs are OFF if balancing disabled
+        // Serial.println("Cell balancing disabled");
         for (int i = 0; i < 4; i++) balanceActive[i] = false;
 
         digitalWrite(PIN_BAL1, LOW);
@@ -241,15 +297,27 @@ void update() {
 
     // Print for UI display
     Serial.print(cellVoltages.c1_mv); Serial.print(",");
-    Serial.print(cellVoltages.c2_mv); Serial.print(",");
-    Serial.print(cellVoltages.c3_mv); Serial.print(",");
-    Serial.print(cellVoltages.c4_mv); Serial.print(",");
+    Serial.print(cellVoltages.c1_mv); Serial.print(",");
+    Serial.print(cellVoltages.c1_mv); Serial.print(",");
+    Serial.print(cellVoltages.c1_mv); Serial.print(",");
     Serial.print(packCurrent, 3);     Serial.print(",");
     Serial.print(tempC_int);          Serial.print(".");
     Serial.print(tempC_frac);         Serial.print(",");
     Serial.print(soc_pct);            Serial.print(",");
     Serial.print(adcFET);             Serial.print(",");
-    Serial.println(balanceFET);
+    Serial.println(balanceFET);     Serial.print(",");
+
+
+
+
+    Serial.print(cell_SOCs.c1_soc); Serial.print(",");
+    Serial.print(cell_SOCs.c2_soc); Serial.print(",");
+    Serial.print(cell_SOCs.c3_soc); Serial.print(",");
+    Serial.print(cell_SOCs.c4_soc); Serial.print(",");
+    // Serial.println(balanceActive[0] == true ? 1: 0);
+    // Serial.println(balanceActive[1] == true ? 1: 0);
+    // Serial.println(balanceActive[2] == true ? 1: 0);
+    // Serial.println(balanceActive[3] == true ? 1: 0);
 }
 
 // ==========================================================
@@ -271,7 +339,7 @@ void loop() {
         adcTapVoltages();
         adcCurrentSense();
         i2cTempSense();
-        coulombCount();
+        // coulombCount();
         balanceDriver();
         update();
     }
